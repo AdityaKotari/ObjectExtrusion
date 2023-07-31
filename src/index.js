@@ -1,11 +1,8 @@
-import { ArcRotateCamera, Color4, CreateBox, CreateLines, Mesh, MultiPointerScaleBehavior, PointerEventTypes, Space, UniversalCamera, VertexData } from "@babylonjs/core";
+import { ArcRotateCamera, Color4, CreateBox, CreateLines, Mesh, MeshBuilder, MultiPointerScaleBehavior, PointerEventTypes, Space, StandardMaterial, Tools, UniversalCamera, VertexData } from "@babylonjs/core";
 import { Engine } from "@babylonjs/core/Engines/engine";
 import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Scene } from "@babylonjs/core/scene";
-
-// ------------------- constants -------------------
-const initialBoxSize = 1;
 
 // ------------------ scene setup ------------------
 const canvas = document.getElementById("renderCanvas");
@@ -18,106 +15,144 @@ const scene = new Scene(engine);
     This creates and positions an universal camera
 
     Note: ArcRotateCamera is more intuitive to use with only a mouse 
-    but requires clicks which conflicts with our use case.
+    so I've preferred that over UniversalCamera.
 */
-const camera = new UniversalCamera("camera1", new Vector3(6, 3, -6), scene);
-//const camera = new ArcRotateCamera("camera1", 3*Math.PI/4, Math.PI/3, 10, Vector3.Zero(), scene);
+//const camera = new UniversalCamera("camera1", new Vector3(6, 3, -6), scene);
+const camera = new ArcRotateCamera("camera1", 1 * Math.PI / 8, Math.PI / 3, 10, Vector3.Zero(), scene);
 camera.setTarget(Vector3.Zero());
 camera.attachControl(canvas, true);
 
 const light = new HemisphericLight("light1", new Vector3(1, 1, 0), scene);
-light.intensity = 0.7;
+light.intensity = 1;
 
-// ------------------ rendering box ------------------
-const box = CreateBox("box", { size: initialBoxSize }, scene);
-box.updatable = true;
-box.position.set(1.5, 1, 1.5);
-box.enableEdgesRendering();
-box.edgesWidth = 1.5;
-box.edgesColor = new Color4(0, 1, 0, 1);
+
+// ------------------ global variables ------------------
+// caches previous dimensions and center to use to calculate new center and dimensions
+var boxDepth = 1, boxWidth = 1, boxHeight = 1, boxCenter = new Vector3(1.5, 1, 1.5);
+var boxDepthTemp = null, boxWidthTemp = null, boxHeightTemp = null, boxCenterTemp = null;
+
+var selectedFacet = null, selectedMesh = null;
+var tempMesh = null, pickMesh = null;
+var mouseText = null;
+
+// constants
+const green = new Color4(0, 1, 0, 1);
+const red = new Color4(1, 0, 0, 1);
 
 // ------------------ rendering axis ------------------
-
 // rendering x, y, z axis
 const myPoints = [
-    new Vector3(5, 0, 0),
+    new Vector3(100, 0, 0),
     new Vector3(0, 0, 0),
-    new Vector3(0, 5, 0),
+    new Vector3(0, 100, 0),
     new Vector3(0, 0, 0),
-    new Vector3(0, 0, 5),
+    new Vector3(0, 0, 100),
 ]
 const lines = CreateLines("lines", { points: myPoints, updatable: true }, scene);
+lines.isPickable = false;
 
-var newScale = null;
-var selectedMesh = null;
-var worldPosition = new Vector3(1.5, 1, 1.5);
-var prevFacet = -1;
+// ------------------ rendering box ------------------
+// convenience function to create a box and cache dimensions, center
+const createBoxAt = (depth, width, height, center, color) => {
+    if (depth === null || width === null || height === null || center === null || color === null)
+        return null;
+    const box = CreateBox("initialbox", { height: height, width: width, depth: depth }, scene);
+    if (center !== null) {
+        box.position.set(center.x, center.y, center.z);
+    }
+    box.enableEdgesRendering();
+    box.edgesWidth = 1.5;
+    box.edgesColor = color;
 
-// ------------------ event and logic for extrusion ------------------
+    return box;
+};
+// creating the initial box
+const box = createBoxAt(boxDepth, boxWidth, boxHeight, boxCenter, green);
+
+// ------------------ events and logic for extrusion ------------------
 scene.onPointerObservable.add((pointerInfo) => {
     switch (pointerInfo.type) {
         case PointerEventTypes.POINTERDOWN:
             //console.log("POINTER DOWN");
             if (selectedMesh !== null) {
                 //box.setAbsolutePosition(worldPosition);
+                // selectedMesh = null;
+                // newScale = null;
+
+                boxHeight = boxHeightTemp;
+                boxWidth = boxWidthTemp;
+                boxDepth = boxDepthTemp;
+                boxCenter = boxCenterTemp;
+                
+                selectedMesh.dispose();
+                selectedFacet = null;
                 selectedMesh = null;
-                newScale = null;
+
+                tempMesh = null;
+
+                pickMesh.dispose();
+                pickMesh = null;
             }
             else {
                 const pickResult = scene.pick(scene.pointerX, scene.pointerY);
                 if (pickResult !== null && pickResult.pickedMesh !== null) {
-                    if (pickResult.pickedMesh.id === "box" && pickResult.faceId !== null) {
+                    if (pickResult.pickedMesh.id === "initialbox" && pickResult.faceId !== null) {
                         selectedMesh = pickResult.pickedMesh;
 
-                        const facet = 2 * Math.floor(pickResult.faceId / 2);
-                        console.log(facet)
+                        selectedFacet = 2 * Math.floor(pickResult.faceId / 2);
+                        console.log(selectedFacet)
 
-                        const boxDepth = initialBoxSize * box.scaling.z;
-                        const boxHeight = initialBoxSize * box.scaling.y;
-                        const boxLength = initialBoxSize * box.scaling.x;
-
-                        // box.computeWorldMatrix(true);
-                        worldPosition = box.absolutePosition.clone();
-                        // worldPosition = box.getBoundingInfo().boundingBox.centerWorld;
-                        // const relativeLocalPosition = worldPosition.subtract(box.position)
-
-                        const pointerScale = 0.002;
-                        console.log(worldPosition)
-                        console.log(box.getPositionData())
-                        console.log(box.get)
-                        switch (facet) {
+                        // facet corresponds to which face is picked
+                        switch (selectedFacet) {
                             case 0:
                                 // +z face
-                                box.setPivotPoint(new Vector3(0, 0, -boxDepth / 2).add(worldPosition), Space.WORLD);
-                                newScale = new Vector3(0, 0, pointerScale);
+                                pickMesh = createBoxAt(100, boxWidth, boxHeight, boxCenter, red);
+                                pickMesh.isPickable = true;
+                                var mat = new StandardMaterial("mat", scene);
+                                mat.alpha = 0;
+                                pickMesh.material = mat;
                                 break;
                             case 2:
                                 // -z face
-                                box.setPivotPoint(new Vector3(0, 0, boxDepth / 2).add(worldPosition), Space.WORLD);
-                                newScale = new Vector3(0, 0, pointerScale);
+                                pickMesh = createBoxAt(100, boxWidth, boxHeight, boxCenter, red);
+                                pickMesh.isPickable = true;
+                                var mat = new StandardMaterial("mat", scene);
+                                mat.alpha = 0;
+                                pickMesh.material = mat;
                                 break;
                             case 4:
                                 // +x face
-                                box.setPivotPoint(new Vector3(-boxLength / 2, 0, 0).add(worldPosition), Space.WORLD);
-                                newScale = new Vector3(pointerScale, 0, 0);
+                                pickMesh = createBoxAt(boxDepth, 100, boxHeight, boxCenter, red);
+                                pickMesh.isPickable = true;
+                                var mat = new StandardMaterial("mat", scene);
+                                mat.alpha = 0;
+                                pickMesh.material = mat;
                                 break;
                             case 6:
                                 // -x face
-                                box.setPivotPoint(new Vector3(boxLength / 2, 0, 0).add(worldPosition), Space.WORLD);
-                                newScale = new Vector3(pointerScale, 0, 0);
+                                pickMesh = createBoxAt(boxDepth, 100, boxHeight, boxCenter, red);
+                                pickMesh.isPickable = true;
+                                var mat = new StandardMaterial("mat", scene);
+                                mat.alpha = 0;
+                                pickMesh.material = mat;
                                 break;
                             case 8:
                                 // +y face
-                                box.setPivotPoint(new Vector3(0, -boxHeight / 2, 0).add(worldPosition), Space.WORLD);
-                                newScale = new Vector3(0, pointerScale, 0);
+                                pickMesh = createBoxAt(boxDepth, boxWidth, 100, boxCenter, red);
+                                pickMesh.isPickable = true;
+                                var mat = new StandardMaterial("mat", scene);
+                                mat.alpha = 0;
+                                pickMesh.material = mat;
                                 break;
                             case 10:
                                 // -y face
-                                box.setPivotPoint(new Vector3(0, boxHeight / 2, 0).add(worldPosition), Space.WORLD);
-                                newScale = new Vector3(0, pointerScale, 0);
+                                pickMesh = createBoxAt(boxDepth, boxWidth, 100, boxCenter, red);
+                                pickMesh.isPickable = true;
+                                var mat = new StandardMaterial("mat", scene);
+                                mat.alpha = 0;
+                                pickMesh.material = mat;
                                 break;
                         }
-                        box.setAbsolutePosition(worldPosition);
 
 
                     }
@@ -126,10 +161,56 @@ scene.onPointerObservable.add((pointerInfo) => {
             break;
         case PointerEventTypes.POINTERMOVE:
             //console.log("POINTER MOVE");
-            if (selectedMesh !== null) {
+            const pickedPoint = scene.pick(scene.pointerX, scene.pointerY).pickedPoint;
+            console.log(pickedPoint)
+            if (selectedMesh !== null && pickedPoint !== null) {
+                // initializing to default
+                boxHeightTemp = boxHeight;
+                boxWidthTemp = boxWidth;
+                boxDepthTemp = boxDepth;
 
-                const currentScale = selectedMesh.scaling;
-                selectedMesh.scaling.set(currentScale.x + newScale.x, currentScale.y + newScale.y, currentScale.z + newScale.z);
+                var mouseTextValue = "";
+
+                // cases for which face is picked
+                switch (selectedFacet) {
+                    case 0:
+                        // +z face
+                        boxDepthTemp = Math.abs(pickedPoint.z - (boxCenter.z - boxDepth / 2))
+                        boxCenterTemp = new Vector3(boxCenter.x, boxCenter.y, (pickedPoint.z + boxCenter.z - boxDepth / 2) / 2);
+                        mouseTextValue = boxDepthTemp.toString();
+                        break;
+                    case 2:
+                        // -z face
+                        boxDepthTemp = Math.abs(pickedPoint.z - (boxCenter.z + boxDepth / 2))
+                        boxCenterTemp = new Vector3(boxCenter.x, boxCenter.y, (pickedPoint.z + boxCenter.z + boxDepth / 2) / 2);
+                        mouseTextValue = boxDepthTemp.toString();
+                        break;
+                    case 4:
+                        // +x face
+                        boxWidthTemp = Math.abs(pickedPoint.x - (boxCenter.x - boxWidth/2));
+                        boxCenterTemp = new Vector3((pickedPoint.x + boxCenter.x - boxWidth/2)/2, boxCenter.y, boxCenter.z);
+                        break;
+                    case 6:
+                        // -x face
+                        boxWidthTemp = Math.abs(pickedPoint.x - (boxCenter.x + boxWidth/2));
+                        boxCenterTemp = new Vector3((pickedPoint.x + boxCenter.x + boxWidth/2)/2, boxCenter.y, boxCenter.z);
+                        break;
+                    case 8:
+                        // +y face
+                        boxHeightTemp = Math.abs(pickedPoint.y - (boxCenter.y - boxHeight/2));
+                        boxCenterTemp = new Vector3(boxCenter.x, (pickedPoint.y + boxCenter.y - boxHeight/2)/2, boxCenter.z);
+                        break;
+                    case 10:
+                        // -y face
+                        boxHeightTemp = Math.abs(pickedPoint.y - (boxCenter.y + boxHeight/2));
+                        boxCenterTemp = new Vector3(boxCenter.x, (pickedPoint.y + boxCenter.y + boxHeight/2)/2, boxCenter.z);
+                        break;
+                }
+                var newMesh = createBoxAt(boxDepthTemp, boxWidthTemp, boxHeightTemp, boxCenterTemp, green);
+                if (tempMesh !== null) {
+                    tempMesh.dispose();
+                }
+                tempMesh = newMesh;
             }
             break;
     }
