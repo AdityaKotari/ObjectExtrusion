@@ -1,6 +1,6 @@
 #### live demo hosted at: [https://extrude-demo-aditya.vercel.app/](https://extrude-demo-aditya.vercel.app/)
 
-# 🚀 Extrude demo on Three.js
+# 🚀 Object Extrusion on Three.js
 
 Recognizes mouse clicks and visualizes multiple extrusions made to an object in Three.js, without using gizmos.
 
